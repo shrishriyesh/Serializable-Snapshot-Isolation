@@ -1,100 +1,130 @@
-# transaction_manager.py
-
+from sites import Site
 from transaction import Transaction
-from site import Site
+import copy
 
 class TransactionManager:
     def __init__(self):
-        self.time = 0
-        self.transactions = {}
-        self.sites = {i: Site(i) for i in range(1, 11)}
-        # Additional initialization as needed
+        self.sites = {i: Site(i) for i in range(1, 11)}  # Sites 1 to 10
+        self.transactions = {}  
+        self.time = 0  
 
-    def begin(self, transactionID, timeStamp):
-        transaction = Transaction(transactionID, timeStamp)
-        self.transactions[transactionID] = transaction
-        print(f"Transaction T{transactionID} begins at time {timeStamp}")
+    def begin_transaction(self, transaction_id):
+        transaction = Transaction(transaction_id, self.time, self.sites)
+        self.transactions[transaction_id] = transaction
+        print(f"{transaction_id} begins")
 
-    def beginRO(self, transactionID, timeStamp):
-        transaction = Transaction(transactionID, timeStamp, is_read_only=True)
-        self.transactions[transactionID] = transaction
-        print(f"Read-only transaction T{transactionID} begins at time {timeStamp}")
+    def read(self, transaction_id, variable_name):
+        print(f"{transaction_id} reads {variable_name}")
+        self.transactions[transaction_id].read(variable_name)
+    
+    def write(self, transaction_id, variable_name, value):
+        print(f"{transaction_id} writes {variable_name} = {value}")
+        self.transactions[transaction_id].write(variable_name, value)
 
-    def read(self, transactionID, variableId, timeStamp):
-        variable_name = f"x{variableId}"
-        transaction = self.transactions.get(transactionID)
-        if transaction:
-            value = transaction.read(variable_name, self.sites)
-            if value is not None:
-                print(f"{variable_name}: {value}")
-            else:
-                print(f"Transaction T{transactionID} waits to read {variable_name}")
+    def end_transaction(self, transaction_id, sites):
+        print(f"{transaction_id} ends")
+        #if it doesnt return None, then update the sites with the new values it returns
+        mysites = self.transactions[transaction_id].commit(sites)
+        if mysites:
+            self.sites = mysites
+            #All the transactions must also update their sites to the new sites
+            for transaction in self.transactions.values():
+                transaction.sites_snapshot = copy.deepcopy(mysites)
         else:
-            print(f"Transaction T{transactionID} not found.")
+            #remove transaction from the list of transactions
+            del self.transactions[transaction_id]
 
-    def write(self, transactionID, variableId, value, timeStamp):
-        variable_name = f"x{variableId}"
-        transaction = self.transactions.get(transactionID)
-        if transaction:
-            transaction.write(variable_name, value, self.sites)
-            print(f"Transaction T{transactionID} writes {value} to {variable_name}")
-        else:
-            print(f"Transaction T{transactionID} not found.")
-
-    def fail(self, siteID):
-        site = self.sites.get(siteID)
-        if site:
-            site.fail()
-            print(f"Site {siteID} failed at time {self.time}")
-        else:
-            print(f"Site {siteID} does not exist.")
-
-    def recover(self, siteID):
-        site = self.sites.get(siteID)
-        if site:
-            site.recover()
-            print(f"Site {siteID} recovered at time {self.time}")
-        else:
-            print(f"Site {siteID} does not exist.")
-
-    def end(self, transactionID, timeStamp):
-        transaction = self.transactions.get(transactionID)
-        if transaction:
-            # Perform validation checks
-            if self.validate_transaction(transaction):
-                # Commit the transaction
-                transaction.status = 'committed'
-                self.commit_transaction(transaction)
-                print(f"T{transactionID} commits")
-            else:
-                # Abort the transaction
-                transaction.status = 'aborted'
-                self.abort_transaction(transaction)
-                print(f"T{transactionID} aborts")
-            # Remove transaction from active transactions
-            del self.transactions[transactionID]
-        else:
-            print(f"Transaction T{transactionID} not found.")
+        print("After end transaction database state:")
+        for site in self.sites.values():
+            print(site)
 
     def dump(self):
+        # Placeholder for the dump method
+        print("Dumping database state:")
         for site in self.sites.values():
-            site.dump()
+            print(site)
+         
+    def fail_site(self, site_id):
+        site = self.sites.get(site_id)
+        # Go through all the transactions and if they have a write on the site that failed, then abort and remove the transaction.
+        if site:
+            site.fail()
+        else:
+            print(f"Site {site_id} does not exist")
 
-    # Placeholder methods for commit, abort, and validation
-    def validate_transaction(self, transaction):
-        # Implement validation logic based on SSI and abort rules
-        return True  # For now, assume it always validates
+    def recover_site(self, site_id):
+        site = self.sites.get(site_id)
+        if site:
+            site.recover()
+        else:
+            print(f"Site {site_id} does not exist")
 
-    def commit_transaction(self, transaction):
-        # Commit writes to all sites
-        for variable_name, value in transaction.write_set.items():
-            for site in self.sites.values():
-                if site.is_up and site.has_variable(variable_name):
-                    site.commit(variable_name, value, transaction.id)
-        # Additional commit logic as needed
+    def process_command(self, command):
+        self.time += 1
+        command = command.strip()
 
-    def abort_transaction(self, transaction):
-        # Clean up after aborting
-        pass  # Implement abort logic as needed
+        # Handle begin(T1)
+        if command.startswith('begin(') and command.endswith(')'):
+            transaction_id = command[6:-1]
+            self.begin_transaction(transaction_id)
+            return
 
-    # Additional methods as needed
+        # Handle R(T1, x2)
+        elif command.startswith('R(') and command.endswith(')'):
+            inside = command[2:-1]  # Extract the content inside parentheses
+            parts = [part.strip() for part in inside.split(',')]
+            if len(parts) == 2:
+                transaction_id, variable_name = parts
+                self.read(transaction_id, variable_name)
+            else:
+                print(f"Invalid read command: {command}")
+            return
+
+        # Handle W(T1, x2, 100)
+        elif command.startswith('W(') and command.endswith(')'):
+            inside = command[2:-1]
+            parts = [part.strip() for part in inside.split(',')]
+            if len(parts) == 3:
+                transaction_id, variable_name, value = parts
+                try:
+                    value = int(value)
+                    self.write(transaction_id, variable_name, value)
+                except ValueError:
+                    print(f"Invalid write value: {value}")
+            else:
+                print(f"Invalid write command: {command}")
+            return
+
+        # Handle end(T1)
+        elif command.startswith('end(') and command.endswith(')'):
+            transaction_id = command[4:-1]
+            self.end_transaction(transaction_id, self.sites)
+            return
+
+        # Handle dump()
+        elif command == 'dump()':
+            self.dump()
+            return
+
+        # Handle fail(2)
+        elif command.startswith('fail(') and command.endswith(')'):
+            site_id_str = command[5:-1]
+            try:
+                site_id = int(site_id_str)
+                self.fail_site(site_id)
+            except ValueError:
+                print(f"Invalid site id: {site_id_str}")
+            return
+
+        # handle recover(2)
+        elif command.startswith('recover(') and command.endswith(')'):
+            site_id_str = command[8:-1]
+            try:
+                site_id = int(site_id_str)
+                self.recover_site(site_id)
+            except ValueError:
+                print(f"Invalid site id: {site_id_str}")
+            return
+
+        else:
+            print(f"Unknown command: {command}")
