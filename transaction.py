@@ -27,7 +27,8 @@ class Transaction:
         #print the state of the sites after writing
         print("After writing:")
         for site in self.sites_snapshot.values():
-            print(site)
+            if site.is_up:
+                print(site)
 
     # returns the new value of the sites if the transaction is not aborted. Or else it sends the abort signal and returns null
     def commit(self, current_sites):
