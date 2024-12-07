@@ -6,14 +6,48 @@ class TransactionManager:
     def __init__(self):
         self.sites = {i: Site(i) for i in range(1, 11)}  # Sites 1 to 10
         self.transactions = {}  
-        self.time = 0  
+        self.time = 0
+        self.last_commits = {}  
+        self.serialization_graph = {} # Adj list
+        self.overall_reads = {} # Dict of variable name to list of transactions that read it
+        self.overall_writes = {} # Dict of variable name to list of transactions that write it
 
     def begin_transaction(self, transaction_id):
-        transaction = Transaction(transaction_id, self.time, self.sites)
+        transaction = Transaction(transaction_id, self.time, self.sites, self)
         self.transactions[transaction_id] = transaction
         print(f"{transaction_id} begins")
 
+    def detect_cycle(self):
+        visited = {}
+        def dfs(txn):
+            visited[txn] = 'gray'
+            for nxt in self.serialization_graph.get(txn, []):
+                if nxt not in visited:
+                    if dfs(nxt):
+                        return True
+                elif visited[nxt] == 'gray':
+                    # cycle detected
+                    return True
+            visited[txn] = 'black'
+            return False
+
+        for txn in self.serialization_graph:
+            if txn not in visited:
+                if dfs(txn):
+                    return True
+        return False
+
     def read(self, transaction_id, variable_name):
+        #Add variable -> transaction mapping to overall reads if the transaction_id is not available already
+        if variable_name not in self.overall_reads:
+            self.overall_reads[variable_name] = [(transaction_id, self.time)]
+        else:
+        # Check if transaction_id is already associated with the variable
+            existing_transactions = [entry[0] for entry in self.overall_reads[variable_name]]
+            if transaction_id not in existing_transactions:
+                self.overall_reads[variable_name].append((transaction_id, self.time))
+
+
         if transaction_id not in self.transactions:
             print(f"{transaction_id} Aborted so not available to read")
         else:
@@ -21,6 +55,14 @@ class TransactionManager:
             self.transactions[transaction_id].read(variable_name)
     
     def write(self, transaction_id, variable_name, value):
+        #Add variable -> transaction mapping to overall writes if the transaction_id is not available already
+        if variable_name not in self.overall_writes:
+            self.overall_writes[variable_name] = [(transaction_id, self.time)]
+        else:
+            existing_transactions = [entry[0] for entry in self.overall_writes[variable_name]]
+            if transaction_id not in existing_transactions:
+                self.overall_writes[variable_name].append((transaction_id, self.time))
+
         if transaction_id not in self.transactions:
             print(f"{transaction_id} Aborted so not available to write")
             return
@@ -45,14 +87,14 @@ class TransactionManager:
                         if variable_name in self.transactions[transaction_id].variables_write:
                             global_site.variables[variable_name].value = variable.value
                             print(f"{transaction_id} commits {variable_name} = {variable.value} to Site {site_id}")
+            del self.transactions[transaction_id]
         else:
             #remove transaction from the list of transactions
             del self.transactions[transaction_id]
 
         print("After end transaction database state:")
         for site in self.sites.values():
-            if site.is_up:
-                print(site)
+            print(site)
 
     def dump(self):
         # Placeholder for the dump method
@@ -62,6 +104,7 @@ class TransactionManager:
          
     def fail_site(self, site_id):
         site = self.sites.get(site_id)
+
         # Go through all the transactions and if they have a write on the site that failed, 
         # then abort and remove the transaction.
         transactions_to_remove = []
@@ -75,7 +118,6 @@ class TransactionManager:
             transaction.sites_snapshot[site_id].is_up = False
         for transaction_id in transactions_to_remove:
             del self.transactions[transaction_id]
-        
 
         if site:
             site.fail()
@@ -84,7 +126,6 @@ class TransactionManager:
 
     def recover_site(self, site_id):
         site = self.sites.get(site_id)
-        #Needs to copy the site from the global copy of sites that has been maintained
         if site:
             site.recover()
         else:
@@ -92,11 +133,17 @@ class TransactionManager:
 
         global_site = copy.deepcopy(self.sites[site_id])
         for transaction in self.transactions.values():
-            transaction.sites_snapshot[site_id] = global_site
+            transaction.sites_snapshot[site_id] = copy.deepcopy(global_site)
             transaction.sites_snapshot[site_id].is_up = True
-        
 
     def process_command(self, command):
+        if '//' in command:
+            command = command.split('//', 1)[0].strip()
+
+        # If after removing comments the line is empty, just return
+        if not command:
+            return
+        
         self.time += 1
         command = command.strip()
 
